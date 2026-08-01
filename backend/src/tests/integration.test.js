@@ -12,7 +12,7 @@ const {
 const enabled = process.env.RUN_INTEGRATION_TESTS === "true";
 
 /**
- * Node versions ke darmiyan Set-Cookie handling compatible rakhta hai.
+ * Node.js versions ke darmiyan Set-Cookie handling compatible rakhta hai.
  */
 function getSetCookieHeaders(response) {
   if (typeof response.headers.getSetCookie === "function") {
@@ -25,10 +25,6 @@ function getSetCookieHeaders(response) {
     return [];
   }
 
-  /*
-   * Multiple Set-Cookie headers ko split karta hai, lekin Expires
-   * attribute ke andar wali comma ko separator nahi samajhta.
-   */
   return combinedHeader
     .split(/,(?=\s*[^;,=\s]+=[^;,]*)/)
     .map((value) => value.trim())
@@ -36,8 +32,7 @@ function getSetCookieHeaders(response) {
 }
 
 /**
- * Set-Cookie values ko browser-style Cookie request header mein
- * convert karta hai.
+ * Set-Cookie response headers ko Cookie request header mein convert karta hai.
  */
 function cookieHeaderFrom(response) {
   return getSetCookieHeaders(response)
@@ -46,7 +41,7 @@ function cookieHeaderFrom(response) {
 }
 
 /**
- * Assertion fail hone par response body bhi CI log mein show karta hai.
+ * Assertion fail hone par response body CI log mein bhi show karta hai.
  */
 async function assertStatus(response, expectedStatus, label) {
   const responseBody = await response.clone().text();
@@ -71,10 +66,6 @@ test(
   async (context) => {
     let server;
 
-    /*
-     * Test pass ya fail dono conditions mein server aur database
-     * connection properly clean honge.
-     */
     context.after(async () => {
       if (server) {
         await new Promise((resolve) => {
@@ -95,20 +86,9 @@ test(
       }
     });
 
-    /*
-     * GitHub Actions MongoDB service se connection.
-     */
     await connectDatabase();
-
-    /*
-     * Har CI run clean database se start hoga.
-     */
     await mongoose.connection.db.dropDatabase();
 
-    /*
-     * Child process aur fixed port use nahi kiya gaya.
-     * Operating system automatically free random port assign karega.
-     */
     const app = createApp();
     server = http.createServer(app);
 
@@ -138,6 +118,12 @@ test(
     const csrfCookie = `ls_csrf=${csrfToken}`;
 
     /*
+     * Har test run ke liye valid aur unique email addresses.
+     * example.com Joi email validator ke mutabiq valid domain hai.
+     */
+    const uniqueId = `${Date.now()}-${process.pid}`;
+
+    /*
      * 2. Public admin registration reject honi chahiye.
      */
     const adminAttempt = await fetch(
@@ -152,7 +138,7 @@ test(
         },
         body: JSON.stringify({
           name: "Unauthorized Admin",
-          email: `admin-attempt-${Date.now()}@example.test`,
+          email: `admin-attempt-${uniqueId}@example.com`,
           password: "StrongPassword123",
           role: "admin"
         })
@@ -168,7 +154,7 @@ test(
     /*
      * 3. Normal client registration.
      */
-    const email = `client-${Date.now()}@example.test`;
+    const email = `client-${uniqueId}@example.com`;
 
     const registerResponse = await fetch(
       `${baseUrl}/api/v1/auth/register`,
@@ -230,8 +216,7 @@ test(
     );
 
     /*
-     * 5. Verification ke baad secure authentication cookies
-     * response mein honi chahiye.
+     * 5. Verification ke baad authentication cookies milni chahiye.
      */
     const authCookies = cookieHeaderFrom(verifyResponse);
 
@@ -248,7 +233,7 @@ test(
     );
 
     /*
-     * 6. Authenticated /me endpoint test.
+     * 6. Authenticated /me endpoint.
      */
     const meResponse = await fetch(
       `${baseUrl}/api/v1/auth/me`,
@@ -269,19 +254,12 @@ test(
     const me = await meResponse.json();
     const user = me.data.user;
 
-    /*
-     * Public user fields.
-     */
     assert.equal(user.email, email);
     assert.equal(user.role, "client");
     assert.equal(user.emailVerified, true);
 
     /*
-     * Sensitive/internal fields absent honi chahiye.
-     *
-     * undefined comparison ke bajaye property existence check ki gayi
-     * hai. Isse confirm hota hai ke field response mein bilkul maujood
-     * nahi, sirf undefined value nahi.
+     * Sensitive/internal fields response mein bilkul present nahi honi chahiye.
      */
     for (const privateField of [
       "passwordHash",
