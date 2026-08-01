@@ -1,0 +1,17 @@
+{
+  "name": "legalsphere-production",
+  "version": "2.1.0",
+  "private": true,
+  "scripts": {
+    "setup": "node scripts/setup-env.js --frontend-port 8081",
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "test": "npm --prefix backend test && npm --prefix frontend test -- --watchAll=false",
+    "build": "npm --prefix frontend run build",
+    "docker:up": "node scripts/doctor.js && docker compose up --build",
+    "docker:down": "docker compose down",
+    "doctor": "node scripts/doctor.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

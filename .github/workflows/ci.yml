@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  repository:
+    name: Repository and Compose validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate safe CI environment
+        run: node scripts/setup-env.js --frontend-port 8081
+      - name: Validate environment and lockfile registries
+        run: node scripts/doctor.js
+      - name: Validate Docker Compose
+        run: docker compose config > /dev/null
+
+  backend:
+    name: Backend quality and integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NODE_ENV: test
+      PORT: 5051
+      MONGO_URI: mongodb://127.0.0.1:27017/legalsphere_ci
+      APP_ORIGINS: http://localhost:8081,http://127.0.0.1:8081
+      PUBLIC_APP_URL: http://localhost:8081
+      JWT_ACCESS_SECRET: ci-only-secret-that-is-longer-than-thirty-two-characters
+      COOKIE_SECURE: "false"
+      RUN_INTEGRATION_TESTS: "true"
+      EXPOSE_DEV_TOKENS: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test
+
+  frontend:
+    name: Frontend tests and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test -- --watchAll=false --runInBand
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legalsphere-frontend-build
+          path: frontend/build
+          if-no-files-found: error
+          retention-days: 7
+
+  containers:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [repository, backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          tags: legalsphere-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          tags: legalsphere-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3

@@ -1,0 +1,9 @@
+{
+  "short_name": "LegalSphere",
+  "name": "LegalSphere Lawyer Management System",
+  "icons": [{"src": "logo.svg", "sizes": "64x64", "type": "image/svg+xml"}],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#102a43",
+  "background_color": "#f5f7fa"
+}
