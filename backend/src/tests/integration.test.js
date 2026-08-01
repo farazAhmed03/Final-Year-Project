@@ -1,137 +1,299 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
-const path = require("node:path");
+const http = require("node:http");
+const mongoose = require("mongoose");
+
+const createApp = require("../app");
+const {
+  connectDatabase,
+  disconnectDatabase
+} = require("../config/database");
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === "true";
-const baseUrl = `http://127.0.0.1:${process.env.PORT || 5051}`;
 
-function cookiesFrom(response) {
-  const values = typeof response.headers.getSetCookie === "function"
-    ? response.headers.getSetCookie()
-    : [response.headers.get("set-cookie")].filter(Boolean);
-  return values.map((value) => value.split(";")[0]).join("; ");
-}
-
-async function waitForServer(child) {
-  let lastError;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (child.exitCode !== null) {
-      throw new Error(`API exited before becoming ready with code ${child.exitCode}`);
-    }
-    try {
-      const response = await fetch(`${baseUrl}/api/health/ready`);
-      if (response.ok) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+/**
+ * Node versions ke darmiyan Set-Cookie handling compatible rakhta hai.
+ */
+function getSetCookieHeaders(response) {
+  if (typeof response.headers.getSetCookie === "function") {
+    return response.headers.getSetCookie();
   }
-  throw lastError || new Error("API did not become ready");
+
+  const combinedHeader = response.headers.get("set-cookie");
+
+  if (!combinedHeader) {
+    return [];
+  }
+
+  /*
+   * Multiple Set-Cookie headers ko split karta hai, lekin Expires
+   * attribute ke andar wali comma ko separator nahi samajhta.
+   */
+  return combinedHeader
+    .split(/,(?=\s*[^;,=\s]+=[^;,]*)/)
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
-test("authentication workflow rejects admin registration and creates a verified session", {
-  skip: !enabled,
-  timeout: 30000
-}, async (context) => {
-  const root = path.resolve(__dirname, "../..");
-  const child = spawn(process.execPath, ["src/server.js"], {
-    cwd: root,
-    env: {
-      ...process.env,
-      NODE_ENV: "test",
-      PORT: process.env.PORT || "5051",
-      EXPOSE_DEV_TOKENS: "true"
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+/**
+ * Set-Cookie values ko browser-style Cookie request header mein
+ * convert karta hai.
+ */
+function cookieHeaderFrom(response) {
+  return getSetCookieHeaders(response)
+    .map((value) => value.split(";", 1)[0])
+    .join("; ");
+}
 
-  let logs = "";
-  child.stdout.on("data", (chunk) => { logs += chunk.toString(); });
-  child.stderr.on("data", (chunk) => { logs += chunk.toString(); });
+/**
+ * Assertion fail hone par response body bhi CI log mein show karta hai.
+ */
+async function assertStatus(response, expectedStatus, label) {
+  const responseBody = await response.clone().text();
 
-  context.after(async () => {
-    if (child.exitCode === null) {
-      child.kill("SIGTERM");
-      await new Promise((resolve) => {
-        child.once("exit", resolve);
-        setTimeout(resolve, 3000).unref();
-      });
-    }
-  });
+  assert.equal(
+    response.status,
+    expectedStatus,
+    [
+      `${label}: expected HTTP ${expectedStatus}`,
+      `Received HTTP ${response.status}`,
+      `Response body: ${responseBody}`
+    ].join("\n")
+  );
+}
 
-  try {
-    await waitForServer(child);
+test(
+  "authentication workflow rejects admin registration and creates a verified session",
+  {
+    skip: !enabled,
+    timeout: 60_000
+  },
+  async (context) => {
+    let server;
 
-    const csrfResponse = await fetch(`${baseUrl}/api/v1/auth/csrf`);
-    assert.equal(csrfResponse.status, 200);
+    /*
+     * Test pass ya fail dono conditions mein server aur database
+     * connection properly clean honge.
+     */
+    context.after(async () => {
+      if (server) {
+        await new Promise((resolve) => {
+          server.close(resolve);
+
+          if (typeof server.closeAllConnections === "function") {
+            server.closeAllConnections();
+          }
+        });
+      }
+
+      if (mongoose.connection.readyState === 1) {
+        await mongoose.connection.db.dropDatabase();
+      }
+
+      if (mongoose.connection.readyState !== 0) {
+        await disconnectDatabase();
+      }
+    });
+
+    /*
+     * GitHub Actions MongoDB service se connection.
+     */
+    await connectDatabase();
+
+    /*
+     * Har CI run clean database se start hoga.
+     */
+    await mongoose.connection.db.dropDatabase();
+
+    /*
+     * Child process aur fixed port use nahi kiya gaya.
+     * Operating system automatically free random port assign karega.
+     */
+    const app = createApp();
+    server = http.createServer(app);
+
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    const address = server.address();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    /*
+     * 1. CSRF token obtain karein.
+     */
+    const csrfResponse = await fetch(
+      `${baseUrl}/api/v1/auth/csrf`
+    );
+
+    await assertStatus(
+      csrfResponse,
+      200,
+      "Get CSRF token"
+    );
+
     const csrfBody = await csrfResponse.json();
     const csrfToken = csrfBody.data.csrfToken;
     const csrfCookie = `ls_csrf=${csrfToken}`;
 
-    const adminAttempt = await fetch(`${baseUrl}/api/v1/auth/register`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": csrfToken,
-        cookie: csrfCookie
-      },
-      body: JSON.stringify({
-        name: "Unauthorized Admin",
-        email: `admin-attempt-${Date.now()}@example.test`,
-        password: "StrongPassword123",
-        role: "admin"
-      })
-    });
-    assert.equal(adminAttempt.status, 400);
+    /*
+     * 2. Public admin registration reject honi chahiye.
+     */
+    const adminAttempt = await fetch(
+      `${baseUrl}/api/v1/auth/register`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-csrf-token": csrfToken,
+          cookie: csrfCookie
+        },
+        body: JSON.stringify({
+          name: "Unauthorized Admin",
+          email: `admin-attempt-${Date.now()}@example.test`,
+          password: "StrongPassword123",
+          role: "admin"
+        })
+      }
+    );
 
+    await assertStatus(
+      adminAttempt,
+      400,
+      "Reject public administrator registration"
+    );
+
+    /*
+     * 3. Normal client registration.
+     */
     const email = `client-${Date.now()}@example.test`;
-    const registerResponse = await fetch(`${baseUrl}/api/v1/auth/register`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": csrfToken,
-        cookie: csrfCookie
-      },
-      body: JSON.stringify({
-        name: "Integration Client",
-        email,
-        password: "StrongPassword123",
-        role: "client",
-        city: "Lahore"
-      })
-    });
-    assert.equal(registerResponse.status, 201);
+
+    const registerResponse = await fetch(
+      `${baseUrl}/api/v1/auth/register`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-csrf-token": csrfToken,
+          cookie: csrfCookie
+        },
+        body: JSON.stringify({
+          name: "Integration Client",
+          email,
+          password: "StrongPassword123",
+          role: "client",
+          city: "Lahore",
+          phone: "03001234567"
+        })
+      }
+    );
+
+    await assertStatus(
+      registerResponse,
+      201,
+      "Register client"
+    );
+
     const registration = await registerResponse.json();
-    assert.ok(registration.data.developmentVerificationToken);
 
-    const verifyResponse = await fetch(`${baseUrl}/api/v1/auth/verify-email`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-csrf-token": csrfToken,
-        cookie: csrfCookie
-      },
-      body: JSON.stringify({
-        token: registration.data.developmentVerificationToken
-      })
-    });
-    assert.equal(verifyResponse.status, 200);
-    const authCookies = cookiesFrom(verifyResponse);
-    assert.match(authCookies, /ls_access=/);
-    assert.match(authCookies, /ls_refresh=/);
+    assert.ok(
+      registration.data.developmentVerificationToken,
+      "The test environment must expose a one-time verification token"
+    );
 
-    const meResponse = await fetch(`${baseUrl}/api/v1/auth/me`, {
-      headers: { cookie: authCookies }
-    });
-    assert.equal(meResponse.status, 200);
+    /*
+     * 4. Email verification.
+     */
+    const verifyResponse = await fetch(
+      `${baseUrl}/api/v1/auth/verify-email`,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "x-csrf-token": csrfToken,
+          cookie: csrfCookie
+        },
+        body: JSON.stringify({
+          token: registration.data.developmentVerificationToken
+        })
+      }
+    );
+
+    await assertStatus(
+      verifyResponse,
+      200,
+      "Verify email"
+    );
+
+    /*
+     * 5. Verification ke baad secure authentication cookies
+     * response mein honi chahiye.
+     */
+    const authCookies = cookieHeaderFrom(verifyResponse);
+
+    assert.match(
+      authCookies,
+      /(?:^|;\s*)ls_access=/,
+      "The verification response must set an access-token cookie"
+    );
+
+    assert.match(
+      authCookies,
+      /(?:^|;\s*)ls_refresh=/,
+      "The verification response must set a refresh-token cookie"
+    );
+
+    /*
+     * 6. Authenticated /me endpoint test.
+     */
+    const meResponse = await fetch(
+      `${baseUrl}/api/v1/auth/me`,
+      {
+        headers: {
+          accept: "application/json",
+          cookie: authCookies
+        }
+      }
+    );
+
+    await assertStatus(
+      meResponse,
+      200,
+      "Load authenticated user"
+    );
+
     const me = await meResponse.json();
-    assert.equal(me.data.user.email, email);
-    assert.equal(me.data.user.role, "client");
-    assert.equal(me.data.user.passwordHash, undefined);
-    assert.equal(me.data.user.tokenVersion, undefined);
-  } catch (error) {
-    error.message = `${error.message}\nServer logs:\n${logs}`;
-    throw error;
+    const user = me.data.user;
+
+    /*
+     * Public user fields.
+     */
+    assert.equal(user.email, email);
+    assert.equal(user.role, "client");
+    assert.equal(user.emailVerified, true);
+
+    /*
+     * Sensitive/internal fields absent honi chahiye.
+     *
+     * undefined comparison ke bajaye property existence check ki gayi
+     * hai. Isse confirm hota hai ke field response mein bilkul maujood
+     * nahi, sirf undefined value nahi.
+     */
+    for (const privateField of [
+      "passwordHash",
+      "tokenVersion",
+      "firebaseUid",
+      "__v"
+    ]) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(user, privateField),
+        false,
+        `${privateField} must not be present in an API user response`
+      );
+    }
   }
-});
+);
