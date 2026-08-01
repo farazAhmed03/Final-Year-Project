@@ -14,7 +14,7 @@ COPY public ./public
 COPY src ./src
 RUN npm run build
 
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.31-alpine AS runtime
 ENV BACKEND_PORT=3000 \
     NGINX_ENVSUBST_FILTER=^BACKEND_PORT$
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
