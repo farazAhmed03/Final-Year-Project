@@ -138,7 +138,11 @@ test(
         },
         body: JSON.stringify({
           name: "Unauthorized Admin",
+<<<<<<< HEAD
           email: `admin-attempt-${uniqueId}@example.com`,
+=======
+          email: `admin-attempt-${Date.now()}@example.com`,
+>>>>>>> afe059ebde72eb799e44b679878502d16f3837ff
           password: "StrongPassword123",
           role: "admin"
         })
@@ -154,7 +158,11 @@ test(
     /*
      * 3. Normal client registration.
      */
+<<<<<<< HEAD
     const email = `client-${uniqueId}@example.com`;
+=======
+    const email = `client-${Date.now()}@example.com`;
+>>>>>>> afe059ebde72eb799e44b679878502d16f3837ff
 
     const registerResponse = await fetch(
       `${baseUrl}/api/v1/auth/register`,
