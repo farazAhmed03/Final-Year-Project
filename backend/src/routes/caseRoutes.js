@@ -19,6 +19,7 @@ const {
   cleanupTempFiles
 } = require("../services/fileService");
 const { createNotification } = require("../services/notificationService");
+const { findEligibleAppointment } = require("../services/conversationService");
 const { ROLES, CASE_STATUS, LAWYER_VERIFICATION } = require("../constants");
 const { caseTransitions, canTransition } = require("../utils/transitions");
 
@@ -159,7 +160,26 @@ router.get(
     if (!item) throw new ApiError(404, "Case not found", "CASE_NOT_FOUND");
     if (!canAccessCase(item, req.user)) throw new ApiError(403, "You cannot access this case", "FORBIDDEN");
 
-    res.json({ success: true, data: { case: item } });
+    let chatAvailable = false;
+
+    if (req.user.role !== ROLES.ADMIN) {
+      const eligibleAppointment = await findEligibleAppointment(
+        item.client._id,
+        item.lawyer._id
+      );
+
+      chatAvailable = Boolean(eligibleAppointment);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        case: {
+          ...item.toObject(),
+          chatAvailable
+        }
+      }
+    });
   })
 );
 

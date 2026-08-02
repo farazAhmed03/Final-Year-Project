@@ -104,7 +104,7 @@ export default function CaseDetail() {
   const openConversation = async () => {
     const counterpart = user.role === "client" ? item.lawyer : item.client;
     try {
-      const response = await api.post("/conversations", { userId: counterpart._id, caseId: item._id });
+      const response = await api.post("/conversations", { userId: counterpart._id });
       navigate(`/app/chat/${response.data.data.conversation._id}`);
     } catch (requestError) {
       toast.error(apiErrorMessage(requestError));
@@ -172,7 +172,7 @@ export default function CaseDetail() {
 
       <div className="case-detail-actions">
         {statusActions()}
-        {user.role !== "admin" && <button className="btn btn-outline-dark" onClick={openConversation}><FiMessageCircle /> Message {counterpart?.name}</button>}
+        {user.role !== "admin" && item.chatAvailable && <button className="btn btn-outline-dark" onClick={openConversation}><FiMessageCircle /> Open shared conversation</button>}
         {!locked && <button className="btn btn-outline-dark" onClick={() => setDocumentsOpen(true)}><FiPlus /> Add documents</button>}
         {user.role === "client" && item.status === "closed" && !review && (
           <button className="btn btn-gold" onClick={() => setReviewOpen(true)}><FiStar /> Review lawyer</button>
@@ -218,7 +218,11 @@ export default function CaseDetail() {
             <Avatar user={counterpart} size="xl" />
             <h3>{counterpart?.name}</h3>
             <p>{counterpart?.lawyerProfile?.specialization || counterpart?.email}</p>
-            <button className="btn btn-outline-dark w-100" onClick={openConversation}><FiMessageCircle /> Open conversation</button>
+            {item.chatAvailable ? (
+              <button className="btn btn-outline-dark w-100" onClick={openConversation}><FiMessageCircle /> Open shared conversation</button>
+            ) : (
+              <p className="panel-empty">Messaging unlocks after the lawyer confirms an appointment.</p>
+            )}
           </article>
 
           <article className="panel">

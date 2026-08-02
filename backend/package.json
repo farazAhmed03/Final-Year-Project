@@ -9,7 +9,8 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/scripts/seed.js",
     "lint": "node scripts/check-syntax.js",
-    "test": "node --test --test-concurrency=1 src/tests/*.test.js"
+    "test": "node --test --test-concurrency=1 src/tests/*.test.js",
+    "chat:migrate": "node src/scripts/migrateChatConversations.js"
   },
   "engines": {
     "node": ">=20"

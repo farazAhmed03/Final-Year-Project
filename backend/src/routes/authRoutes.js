@@ -1,4 +1,6 @@
 const express = require("express");
+const fs = require("fs/promises");
+const path = require("path");
 const Joi = require("joi");
 const User = require("../models/User");
 const Session = require("../models/Session");
@@ -7,6 +9,7 @@ const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const validate = require("../middleware/validate");
 const { authenticate } = require("../middleware/auth");
+const { upload } = require("../middleware/upload");
 const { authLimiter, sensitiveLimiter } = require("../middleware/rateLimits");
 const { issueCsrfToken } = require("../middleware/csrf");
 const { randomToken, hashToken } = require("../utils/crypto");
@@ -20,6 +23,12 @@ const {
 const { sendVerificationEmail, sendPasswordResetEmail } = require("../services/mailService");
 const { verifyFirebaseToken } = require("../services/firebaseService");
 const {
+  persistTempFile,
+  safePath,
+  deleteStoredFile,
+  cleanupTempFiles
+} = require("../services/fileService");
+const {
   accessCookie,
   refreshCookie,
   setAuthCookies,
@@ -29,6 +38,18 @@ const { ROLES, LAWYER_VERIFICATION } = require("../constants");
 const env = require("../config/env");
 
 const router = express.Router();
+
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_FILE_PATTERN = /^[0-9a-f-]{36}\.(?:jpg|png)$/i;
+
+function localAvatarStorageKey(avatarUrl = "") {
+  const marker = "/api/v1/auth/avatars/";
+
+  if (!avatarUrl.startsWith(marker)) return "";
+
+  const filename = avatarUrl.slice(marker.length);
+  return AVATAR_FILE_PATTERN.test(filename) ? `avatars/${filename}` : "";
+}
 
 const password = Joi.string()
   .min(10)
@@ -353,6 +374,96 @@ router.get(
   })
 );
 
+
+router.get(
+  "/avatars/:filename",
+  asyncHandler(async (req, res) => {
+    const { filename } = req.params;
+
+    if (!AVATAR_FILE_PATTERN.test(filename)) {
+      throw new ApiError(404, "Avatar not found", "AVATAR_NOT_FOUND");
+    }
+
+    const filePath = safePath(`avatars/${filename}`);
+
+    try {
+      await fs.access(filePath);
+    } catch {
+      throw new ApiError(404, "Avatar not found", "AVATAR_NOT_FOUND");
+    }
+
+    res.set({
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "X-Content-Type-Options": "nosniff"
+    });
+
+    res.type(path.extname(filename));
+    res.sendFile(filePath);
+  })
+);
+
+router.post(
+  "/profile/avatar",
+  authenticate,
+  upload.single("avatar"),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      throw new ApiError(400, "Please select an image", "AVATAR_REQUIRED");
+    }
+
+    if (!["image/jpeg", "image/png"].includes(req.file.mimetype)) {
+      await cleanupTempFiles([req.file]);
+      throw new ApiError(
+        415,
+        "Avatar must be a JPG or PNG image",
+        "AVATAR_TYPE_NOT_ALLOWED"
+      );
+    }
+
+    if (req.file.size > AVATAR_MAX_BYTES) {
+      await cleanupTempFiles([req.file]);
+      throw new ApiError(
+        413,
+        "Avatar must be 2 MB or smaller",
+        "AVATAR_TOO_LARGE"
+      );
+    }
+
+    const previousStorageKey = localAvatarStorageKey(req.user.avatarUrl);
+    let stored;
+
+    try {
+      stored = await persistTempFile(req.file, "avatars");
+    } catch (error) {
+      await cleanupTempFiles([req.file]);
+      throw error;
+    }
+
+    const filename = path.basename(stored.storageKey);
+
+    try {
+      req.user.avatarUrl = `/api/v1/auth/avatars/${filename}`;
+      await req.user.save();
+    } catch (error) {
+      await deleteStoredFile(stored.storageKey).catch(() => {});
+      throw error;
+    }
+
+    if (previousStorageKey && previousStorageKey !== stored.storageKey) {
+      deleteStoredFile(previousStorageKey).catch((error) => {
+        console.error("Unable to remove previous avatar", error);
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: req.user.toSafeObject()
+      }
+    });
+  })
+);
+
 router.patch(
   "/profile",
   authenticate,
@@ -360,14 +471,13 @@ router.patch(
     name: Joi.string().trim().min(2).max(100),
     phone: Joi.string().trim().max(30).allow(""),
     city: Joi.string().trim().max(100).allow(""),
-    avatarUrl: Joi.string().uri().max(1000).allow(""),
     bio: Joi.string().trim().max(3000).allow(""),
     specialization: Joi.string().trim().max(100).allow(""),
     experienceYears: Joi.number().integer().min(0).max(80),
     hourlyRate: Joi.number().min(0).max(10000000)
   }).min(1)),
   asyncHandler(async (req, res) => {
-    const direct = ["name", "phone", "city", "avatarUrl"];
+    const direct = ["name", "phone", "city"];
     for (const key of direct) {
       if (Object.prototype.hasOwnProperty.call(req.body, key)) {
         req.user[key] = typeof req.body[key] === "string" ? cleanText(req.body[key], 1000) : req.body[key];

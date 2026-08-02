@@ -5,7 +5,6 @@ import {
   FiBriefcase,
   FiCalendar,
   FiMapPin,
-  FiMessageCircle,
   FiSearch,
   FiStar
 } from "react-icons/fi";
@@ -172,16 +171,6 @@ export function LawyerProfile() {
     }
   };
 
-  const message = async () => {
-    if (!user) return navigate("/login", { state: { from: `/lawyers/${id}` } });
-    try {
-      const response = await api.post("/conversations", { userId: id });
-      navigate(`/app/chat/${response.data.data.conversation._id}`);
-    } catch (requestError) {
-      toast.error(apiErrorMessage(requestError));
-    }
-  };
-
   return (
     <div className="marketing-page profile-public">
       <PublicNav />
@@ -210,7 +199,7 @@ export function LawyerProfile() {
                 {(!user || user.role === "client") && (
                   <>
                     <button className="btn btn-brand btn-lg" onClick={() => setBookingOpen(true)}><FiCalendar /> Request appointment</button>
-                    <button className="btn btn-outline-dark" onClick={message}><FiMessageCircle /> Send message</button>
+                    <small>Messaging becomes available after the lawyer confirms your appointment.</small>
                   </>
                 )}
               </div>

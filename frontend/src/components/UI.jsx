@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { FiAlertCircle, FiInbox, FiLoader } from "react-icons/fi";
 import { initials, titleCase } from "../utils/format";
 
@@ -6,7 +6,7 @@ export function Loader({ label = "Loading…" }) {
   return (
     <div className="loader-inline" role="status" aria-live="polite">
       <FiLoader className="spin" />
-      <span>{label}</span>
+      {label ? <span>{label}</span> : null}
     </div>
   );
 }
@@ -20,18 +20,58 @@ export function FullPageLoader({ label }) {
   );
 }
 
-export function Avatar({ user, size = "md" }) {
-  return user?.avatarUrl ? (
-    <img className={`avatar avatar-${size}`} src={user.avatarUrl} alt="" />
-  ) : (
-    <span className={`avatar avatar-${size} avatar-fallback`} aria-hidden="true">
+export function resolveMediaUrl(value) {
+  const source = String(value || "").trim();
+
+  if (!source) return "";
+  if (/^(?:https?:|data:|blob:)/i.test(source)) return source;
+  if (source.startsWith("/")) return source;
+
+  return `/${source.replace(/^\/+/, "")}`;
+}
+
+export function Avatar({ user, size = "md", alt, className = "", onLoad, onError }) {
+  const source = useMemo(() => resolveMediaUrl(user?.avatarUrl), [user?.avatarUrl]);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [source]);
+
+  const fallback = (
+    <span
+      className={`avatar avatar-${size} avatar-fallback ${className}`.trim()}
+      aria-label={alt || `${user?.name || "User"} avatar`}
+      role="img"
+    >
       {initials(user?.name)}
     </span>
+  );
+
+  if (!source || failed) return fallback;
+
+  return (
+    <img
+      className={`avatar avatar-${size} ${className}`.trim()}
+      src={source}
+      alt={alt || `${user?.name || "User"} profile`}
+      loading="eager"
+      decoding="async"
+      onLoad={onLoad}
+      onError={(event) => {
+        setFailed(true);
+        onError?.(event);
+      }}
+    />
   );
 }
 
 export function StatusBadge({ value }) {
-  return <span className={`status-badge status-${value || "unknown"}`}>{titleCase(value || "unknown")}</span>;
+  return (
+    <span className={`status-badge status-${value || "unknown"}`}>
+      {titleCase(value || "unknown")}
+    </span>
+  );
 }
 
 export function EmptyState({ title, description, action }) {
@@ -53,7 +93,11 @@ export function ErrorState({ message, onRetry }) {
         <strong>Unable to load this section</strong>
         <p>{message}</p>
       </div>
-      {onRetry && <button className="btn btn-outline-dark btn-sm" onClick={onRetry}>Try again</button>}
+      {onRetry && (
+        <button className="btn btn-outline-dark btn-sm" onClick={onRetry}>
+          Try again
+        </button>
+      )}
     </div>
   );
 }
@@ -84,12 +128,24 @@ export function StatCard({ label, value, icon, hint }) {
   );
 }
 
-export function Modal({ open, title, onClose, children, footer }) {
+export function Modal({ open, title, onClose, children, footer, className = "" }) {
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [open, onClose]);
+
   if (!open) return null;
+
   return (
     <div className="modal-backdrop-custom" role="presentation" onMouseDown={onClose}>
       <section
-        className="modal-card"
+        className={`modal-card ${className}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -97,7 +153,9 @@ export function Modal({ open, title, onClose, children, footer }) {
       >
         <header>
           <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+            ×
+          </button>
         </header>
         <div className="modal-body-custom">{children}</div>
         {footer && <footer>{footer}</footer>}

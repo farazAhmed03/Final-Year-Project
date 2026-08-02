@@ -7,10 +7,32 @@ const conversationSchema = new mongoose.Schema(
       ref: "User",
       required: true
     }],
-    participantKey: { type: String, required: true, unique: true, index: true },
-    case: { type: mongoose.Schema.Types.ObjectId, ref: "Case" },
-    lastMessageAt: { type: Date, default: Date.now, index: true },
-    lastMessagePreview: { type: String, maxlength: 200 }
+    participantKey: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true
+    },
+    unlockedAt: {
+      type: Date,
+      default: null,
+      index: true
+    },
+    unlockedByAppointment: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Appointment",
+      default: null
+    },
+    lastMessageAt: {
+      type: Date,
+      default: Date.now,
+      index: true
+    },
+    lastMessagePreview: {
+      type: String,
+      maxlength: 200,
+      default: ""
+    }
   },
   { timestamps: true }
 );

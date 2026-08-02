@@ -7,19 +7,31 @@ const { createNotification } = require("./notificationService");
 async function assertParticipant(conversationId, userId) {
   const conversation = await Conversation.findOne({
     _id: conversationId,
-    participants: userId
+    participants: userId,
+    unlockedAt: { $ne: null }
   });
+
   if (!conversation) {
-    throw new ApiError(404, "Conversation not found", "CONVERSATION_NOT_FOUND");
+    throw new ApiError(
+      404,
+      "Conversation not found or messaging is not available yet",
+      "CONVERSATION_NOT_FOUND"
+    );
   }
+
   return conversation;
 }
 
 async function sendMessage({ io, conversationId, sender, body }) {
   const conversation = await assertParticipant(conversationId, sender._id);
   const cleanBody = cleanText(body, 4000);
+
   if (!cleanBody) {
-    throw new ApiError(400, "Message cannot be empty", "EMPTY_MESSAGE");
+    throw new ApiError(
+      400,
+      "Message cannot be empty",
+      "EMPTY_MESSAGE"
+    );
   }
 
   const message = await Message.create({
@@ -33,10 +45,20 @@ async function sendMessage({ io, conversationId, sender, body }) {
   conversation.lastMessagePreview = cleanBody.slice(0, 200);
   await conversation.save();
 
-  const populated = await message.populate("sender", "name avatarUrl role");
-  io?.to(`conversation:${conversation.id}`).emit("message:new", populated);
+  const populated = await message.populate(
+    "sender",
+    "name avatarUrl role"
+  );
 
-  const receiver = conversation.participants.find((id) => !id.equals(sender._id));
+  io?.to(`conversation:${conversation.id}`).emit(
+    "message:new",
+    populated
+  );
+
+  const receiver = conversation.participants.find(
+    (id) => !id.equals(sender._id)
+  );
+
   if (receiver) {
     await createNotification(io, {
       user: receiver,
@@ -50,4 +72,7 @@ async function sendMessage({ io, conversationId, sender, body }) {
   return populated;
 }
 
-module.exports = { assertParticipant, sendMessage };
+module.exports = {
+  assertParticipant,
+  sendMessage
+};
