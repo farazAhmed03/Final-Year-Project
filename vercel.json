@@ -1,11 +1,12 @@
 {
     "services": {
         "frontend": {
-            "root": "frontend",
-            "framework": "create-react-app"
+            "root": "frontend"
         },
         "backend": {
-            "root": "backend"
+            "root": "backend",
+            "framework": "express",
+            "entrypoint": "src/server.js"
         }
     },
     "rewrites": [
