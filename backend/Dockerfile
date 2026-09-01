@@ -1,9 +1,9 @@
-FROM node:20-bookworm-slim AS dependencies
+FROM node:26-bookworm-slim AS dependencies
 WORKDIR /app
 COPY package*.json .npmrc ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-FROM node:20-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 RUN groupadd --system --gid 1001 nodeapp \
